@@ -1,0 +1,63 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Venue {
+  id                     Int       @id @default(autoincrement())
+  locationId             Int?      @unique
+  location               Location? @relation(fields: [locationId], references: [id]) // <- jedna Location
+  pricePerNightInEURCent Int
+  rating                 Float
+  reviews                Int
+  capacity               Int
+  name                   String
+  images                 Json
+
+  venueDetails VenueDetails?
+}
+
+model Location {
+  id           Int    @id @default(autoincrement())
+  streetNumber Int
+  streetName   String
+  postalCode   String
+  city         String
+
+  venue Venue?
+}
+
+model VenueDetails {
+  id                         Int    @id @default(autoincrement())
+  venuesBasicDataId          Int    @unique
+  description                String
+  activeFiltersAndOccasions  Json
+  sleepingDetails            Json
+  checkInHourPM              Int
+  checkOutHourAM             Int
+  distanceFromCityCenterInKM Float
+  contactDetails             Json
+  socialMediaLinks           Json
+
+  venuesBasicData Venue @relation(fields: [venuesBasicDataId], references: [id])
+}
+
+model VenuesAmenities {
+  id                    Int  @id @default(autoincrement())
+  amenities             Json
+  roomAmenities         Json
+  handicapAccessibility Json
+  neighbourhoods        Json
+  occasions             Json
+}
+
+model User {
+  id       Int    @id @default(autoincrement())
+  email    String @unique
+  name     String
+  password String
+}
