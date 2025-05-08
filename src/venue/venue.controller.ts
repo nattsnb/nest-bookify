@@ -8,6 +8,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -18,6 +19,7 @@ import { UpdateVenueDto } from './dto/update-venue.dto';
 import { JwtAuthenticationGuard } from '../authentication/jwt-authentication.guard';
 import { RequestWithUser } from '../authentication/request-with-user';
 import { Response } from 'express';
+import { VenueFilterDto } from './dto/venue-filter.dto';
 
 @Controller('venue')
 export class VenueController {
@@ -26,6 +28,14 @@ export class VenueController {
   @Get()
   getAll() {
     return this.venueService.getAll();
+  }
+
+  @Get('filter')
+  filterByAmenitiesAndOccasions(@Query() filterDto: VenueFilterDto) {
+    return this.venueService.filterCombined(
+      filterDto.amenities ?? [],
+      filterDto.occasions ?? [],
+    );
   }
 
   @Post()
