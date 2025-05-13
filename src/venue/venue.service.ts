@@ -13,13 +13,14 @@ export class VenueService {
     const venues = await this.prismaService.venue.findMany({
       include: {
         owner: true,
-        amenities: true,
+        amenityToVenues: { include: { amenity: true } },
       },
     });
-    if (!venues.length) {
-      throw new NotFoundException('No venues found');
-    }
-    return venues;
+
+    return venues.map((venue) => ({
+      ...venue,
+      amenities: venue.amenityToVenues.map((venue) => venue.amenity),
+    }));
   }
 
   async create(createVenueData: CreateVenueDto, userId: number) {
@@ -40,11 +41,17 @@ export class VenueService {
           twitterUrl: twitterUrl ?? undefined,
           websiteUrl: websiteUrl ?? undefined,
           owner: { connect: { id: userId } },
-          amenities: amenitiesIds?.length
-            ? { connect: amenitiesIds.map((id) => ({ id })) }
-            : undefined,
         },
       });
+      if (amenitiesIds?.length) {
+        await this.prismaService.amenityToVenue.createMany({
+          data: amenitiesIds.map((amenityId) => ({
+            venueId: newVenue.id,
+            amenityId,
+          })),
+          skipDuplicates: true,
+        });
+      }
       return newVenue;
     } catch (error) {
       if (
@@ -64,29 +71,42 @@ export class VenueService {
       where: { id: venueId },
       include: {
         owner: true,
-        amenities: true,
+        amenityToVenues: { include: { amenity: true } },
       },
     });
+
     if (!venue) {
       throw new NotFoundException(`Venue with ID ${venueId} not found`);
     }
-    return venue;
+
+    return {
+      ...venue,
+      amenities: venue.amenityToVenues.map((venue) => venue.amenity),
+    };
   }
 
   async update(venueId: number, updateVenueData: UpdateVenueDto) {
     const { amenitiesIds, ...venueData } = updateVenueData;
     try {
-      return await this.prismaService.venue.update({
+      const updatedVenue = await this.prismaService.venue.update({
         where: { id: venueId },
-        data: {
-          ...venueData,
-          ...(amenitiesIds?.length && {
-            amenities: {
-              set: amenitiesIds.map((id) => ({ id })) ?? [],
-            },
-          }),
-        },
+        data: venueData,
       });
+      if (amenitiesIds) {
+        await this.prismaService.amenityToVenue.deleteMany({
+          where: { venueId },
+        });
+        if (amenitiesIds.length > 0) {
+          await this.prismaService.amenityToVenue.createMany({
+            data: amenitiesIds.map((amenityId) => ({
+              venueId,
+              amenityId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+      return updatedVenue;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -114,5 +134,59 @@ export class VenueService {
       }
       throw error;
     }
+  }
+
+  async filterByAmenity(amenityIds: number[]) {
+    const matchedVenueIds = await this.prismaService.amenityToVenue.groupBy({
+      by: ['venueId'],
+      where: {
+        amenityId: { in: amenityIds },
+      },
+      having: {
+        amenityId: {
+          _count: {
+            equals: amenityIds.length,
+          },
+        },
+      },
+    });
+    const venueIds = matchedVenueIds.map((item) => item.venueId);
+    if (venueIds.length === 0) {
+      throw new NotFoundException(`No venues found matching all amenities`);
+    }
+    return this.prismaService.venue.findMany({
+      where: {
+        id: { in: venueIds },
+      },
+      include: {
+        reservations: true,
+        favourites: true,
+      },
+    });
+  }
+
+  async filterCombined(amenityIds: number[], occasionIds: number[]) {
+    let allAmenityIds = [...amenityIds];
+
+    if (occasionIds.length > 0) {
+      const occasions = await this.prismaService.occasion.findMany({
+        where: { id: { in: occasionIds } },
+        include: { amenities: true },
+      });
+
+      if (occasions.length === 0) {
+        throw new NotFoundException(
+          `No occasions found for IDs: [${occasionIds.join(', ')}]`,
+        );
+      }
+
+      const occasionAmenityIds = occasions
+        .flatMap((occasion) => occasion.amenities.map((amenity) => amenity.id))
+        .filter((value, index, self) => self.indexOf(value) === index);
+
+      allAmenityIds = [...new Set([...allAmenityIds, ...occasionAmenityIds])];
+    }
+
+    return this.filterByAmenity(allAmenityIds);
   }
 }
