@@ -4,23 +4,32 @@ import { CreateVenueDto } from './dto/create-venue.dto';
 import { UpdateVenueDto } from './dto/update-venue.dto';
 import { PrismaError } from '../database/prisma-error.enum';
 import { Prisma } from '@prisma/client';
+import { VenueFilterDto } from './dto/venue-filter.dto';
 
 @Injectable()
 export class VenueService {
   constructor(private readonly prismaService: PrismaService) {}
 
   async getAll() {
-    const venues = await this.prismaService.venue.findMany({
-      include: {
-        owner: true,
-        amenityToVenues: { include: { amenity: true } },
-      },
-    });
+    try {
+      const venues = await this.prismaService.venue.findMany({
+        include: {
+          owner: true,
+          amenityToVenues: { include: { amenity: true } },
+        },
+      });
 
-    return venues.map((venue) => ({
-      ...venue,
-      amenities: venue.amenityToVenues.map((venue) => venue.amenity),
-    }));
+      if (!venues.length) {
+        throw new NotFoundException('No venues found');
+      }
+
+      return venues.map((venue) => ({
+        ...venue,
+        amenities: venue.amenityToVenues.map((venue) => venue.amenity),
+      }));
+    } catch (error) {
+      throw error;
+    }
   }
 
   async create(createVenueData: CreateVenueDto, userId: number) {
@@ -34,6 +43,7 @@ export class VenueService {
       streetName,
       postalCode,
       city,
+      venueTypeId,
       ...venueData
     } = createVenueData;
 
@@ -60,6 +70,7 @@ export class VenueService {
           instagramUrl: instagramUrl ?? undefined,
           twitterUrl: twitterUrl ?? undefined,
           websiteUrl: websiteUrl ?? undefined,
+          venueType: { connect: { id: venueTypeId } },
           owner: { connect: { id: userId } },
         },
       });
@@ -80,108 +91,113 @@ export class VenueService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === PrismaError.RecordDoesNotExist
       ) {
-        throw new NotFoundException(
-          'Owner or amenity not found – check provided IDs',
-        );
+        throw new NotFoundException('Not found – check provided IDs');
       }
-      console.error('Error creating venue:', error);
       throw error;
     }
   }
 
   async getOne(venueId: number) {
-    const venue = await this.prismaService.venue.findUnique({
-      where: { id: venueId },
-      include: {
-        owner: true,
-        amenityToVenues: { include: { amenity: true } },
-      },
-    });
+    try {
+      const venue = await this.prismaService.venue.findUnique({
+        where: { id: venueId },
+        include: {
+          owner: true,
+          amenityToVenues: { include: { amenity: true } },
+        },
+      });
 
-    if (!venue) {
-      throw new NotFoundException(`Venue with ID ${venueId} not found`);
+      if (!venue) {
+        throw new NotFoundException(`Venue with ID ${venueId} not found`);
+      }
+
+      return {
+        ...venue,
+        amenities: venue.amenityToVenues.map((venue) => venue.amenity),
+      };
+    } catch (error) {
+      throw error;
     }
-
-    return {
-      ...venue,
-      amenities: venue.amenityToVenues.map((venue) => venue.amenity),
-    };
   }
 
   async update(venueId: number, updateVenueData: UpdateVenueDto) {
-    const { amenitiesIds, ...partialData } = updateVenueData;
+    try {
+      const { amenitiesIds, ...partialData } = updateVenueData;
 
-    const existingVenue = await this.prismaService.venue.findUnique({
-      where: { id: venueId },
-    });
-
-    if (!existingVenue) {
-      throw new NotFoundException(`Venue with ID ${venueId} not found`);
-    }
-
-    const streetNumber =
-      updateVenueData.streetNumber ?? existingVenue.streetNumber;
-    const streetName = updateVenueData.streetName ?? existingVenue.streetName;
-    const postalCode = updateVenueData.postalCode ?? existingVenue.postalCode;
-    const city = updateVenueData.city ?? existingVenue.city;
-
-    const shouldRecalculateLocation =
-      updateVenueData.streetNumber !== undefined ||
-      updateVenueData.streetName !== undefined ||
-      updateVenueData.postalCode !== undefined ||
-      updateVenueData.city !== undefined;
-
-    let latitude: number | undefined;
-    let longitude: number | undefined;
-
-    if (shouldRecalculateLocation) {
-      const coordinates = await this.geocodeAddress(
-        streetNumber,
-        streetName,
-        postalCode,
-        city,
-      );
-      latitude = coordinates.latitude;
-      longitude = coordinates.longitude;
-    }
-
-    const updatedVenue = await this.prismaService.venue.update({
-      where: { id: venueId },
-      data: {
-        ...partialData,
-        ...(updateVenueData.streetNumber !== undefined && {
-          streetNumber: updateVenueData.streetNumber,
-        }),
-        ...(updateVenueData.streetName !== undefined && {
-          streetName: updateVenueData.streetName,
-        }),
-        ...(updateVenueData.postalCode !== undefined && {
-          postalCode: updateVenueData.postalCode,
-        }),
-        ...(updateVenueData.city !== undefined && {
-          city: updateVenueData.city,
-        }),
-        ...(latitude !== undefined && { latitude }),
-        ...(longitude !== undefined && { longitude }),
-      },
-    });
-
-    if (amenitiesIds) {
-      await this.prismaService.amenityToVenue.deleteMany({
-        where: { venueId },
+      const existingVenue = await this.prismaService.venue.findUnique({
+        where: { id: venueId },
       });
-      if (amenitiesIds.length > 0) {
-        await this.prismaService.amenityToVenue.createMany({
-          data: amenitiesIds.map((amenityId) => ({
-            venueId,
-            amenityId,
-          })),
-          skipDuplicates: true,
-        });
-      }
-    }
 
-    return updatedVenue;
+      if (!existingVenue) {
+        throw new NotFoundException(`Venue with ID ${venueId} not found`);
+      }
+
+      const streetNumber =
+        updateVenueData.streetNumber ?? existingVenue.streetNumber;
+      const streetName = updateVenueData.streetName ?? existingVenue.streetName;
+      const postalCode = updateVenueData.postalCode ?? existingVenue.postalCode;
+      const city = updateVenueData.city ?? existingVenue.city;
+
+      const shouldRecalculateLocation =
+        updateVenueData.streetNumber !== undefined ||
+        updateVenueData.streetName !== undefined ||
+        updateVenueData.postalCode !== undefined ||
+        updateVenueData.city !== undefined;
+
+      let latitude: number | undefined;
+      let longitude: number | undefined;
+
+      if (shouldRecalculateLocation) {
+        const coordinates = await this.geocodeAddress(
+          streetNumber,
+          streetName,
+          postalCode,
+          city,
+        );
+        latitude = coordinates.latitude;
+        longitude = coordinates.longitude;
+      }
+
+      const updatedVenue = await this.prismaService.venue.update({
+        where: { id: venueId },
+        data: {
+          ...partialData,
+          ...(updateVenueData.streetNumber !== undefined && {
+            streetNumber: updateVenueData.streetNumber,
+          }),
+          ...(updateVenueData.streetName !== undefined && {
+            streetName: updateVenueData.streetName,
+          }),
+          ...(updateVenueData.postalCode !== undefined && {
+            postalCode: updateVenueData.postalCode,
+          }),
+          ...(updateVenueData.city !== undefined && {
+            city: updateVenueData.city,
+          }),
+          ...(latitude !== undefined && { latitude }),
+          ...(longitude !== undefined && { longitude }),
+        },
+      });
+
+      if (amenitiesIds) {
+        await this.prismaService.amenityToVenue.deleteMany({
+          where: { venueId },
+        });
+        if (amenitiesIds.length > 0) {
+          await this.prismaService.amenityToVenue.createMany({
+            data: amenitiesIds.map((amenityId) => ({
+              venueId,
+              amenityId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      return updatedVenue;
+    } catch (error) {
+      throw error;
+    }
   }
 
   async delete(venueId: number) {
@@ -202,58 +218,129 @@ export class VenueService {
     }
   }
 
-  async filterByAmenity(amenityIds: number[]) {
-    const matchedVenueIds = await this.prismaService.amenityToVenue.groupBy({
-      by: ['venueId'],
-      where: {
-        amenityId: { in: amenityIds },
-      },
-      having: {
-        amenityId: {
-          _count: {
-            equals: amenityIds.length,
+  async findWithFilters(filters: VenueFilterDto) {
+    try {
+      const {
+        amenities = [],
+        occasions = [],
+        venueTypeId,
+        pricePerNightInEURCentMin,
+        pricePerNightInEURCentMax,
+        dateStart,
+        dateEnd,
+        guests,
+        latitude,
+        longitude,
+        radiusKm,
+      } = filters;
+
+      const allAmenities = await this.getCombinedAmenities(
+        amenities,
+        occasions,
+      );
+
+      const where: Prisma.VenueWhereInput = {};
+
+      if (allAmenities.length > 0) {
+        where.AND = allAmenities.map((amenityId) => ({
+          amenityToVenues: {
+            some: { amenityId },
           },
-        },
-      },
-    });
-    const venueIds = matchedVenueIds.map((item) => item.venueId);
-    if (venueIds.length === 0) {
-      throw new NotFoundException(`No venues found matching all amenities`);
-    }
-    return this.prismaService.venue.findMany({
-      where: {
-        id: { in: venueIds },
-      },
-      include: {
-        reservations: true,
-        favourites: true,
-      },
-    });
-  }
-
-  async filterCombined(amenityIds: number[], occasionIds: number[]) {
-    let allAmenityIds = [...amenityIds];
-
-    if (occasionIds.length > 0) {
-      const occasions = await this.prismaService.occasion.findMany({
-        where: { id: { in: occasionIds } },
-        include: { amenities: true },
-      });
-
-      if (occasions.length === 0) {
-        throw new NotFoundException(
-          `No occasions found for IDs: [${occasionIds.join(', ')}]`,
-        );
+        }));
       }
 
-      const occasionAmenityIds = occasions
-        .flatMap((occasion) => occasion.amenities.map((amenity) => amenity.id))
-        .filter((value, index, self) => self.indexOf(value) === index);
+      if (venueTypeId != null) {
+        where.venueTypeId = venueTypeId;
+      }
 
-      allAmenityIds = [...new Set([...allAmenityIds, ...occasionAmenityIds])];
+      if (
+        pricePerNightInEURCentMin != null ||
+        pricePerNightInEURCentMax != null
+      ) {
+        where.pricePerNightInEURCent = {};
+        if (pricePerNightInEURCentMin != null)
+          where.pricePerNightInEURCent.gte = pricePerNightInEURCentMin;
+        if (pricePerNightInEURCentMax != null)
+          where.pricePerNightInEURCent.lte = pricePerNightInEURCentMax;
+      }
+
+      if (dateStart && dateEnd) {
+        where.reservations = {
+          none: {
+            isPendingRating: true,
+            dateStart: { lt: new Date(dateEnd) },
+            dateEnd: { gt: new Date(dateStart) },
+          },
+        };
+      }
+
+      if (guests != null) {
+        where.capacity = { gte: guests };
+      }
+
+      if (
+        latitude != null &&
+        longitude != null &&
+        radiusKm != null &&
+        !isNaN(latitude) &&
+        !isNaN(longitude) &&
+        !isNaN(radiusKm)
+      ) {
+        const lat = latitude;
+        const lng = longitude;
+        const kmInDegree = 111;
+        const deltaLat = radiusKm / kmInDegree;
+        const deltaLng =
+          radiusKm / (kmInDegree * Math.cos((lat * Math.PI) / 180));
+
+        where.latitude = {
+          gte: lat - deltaLat,
+          lte: lat + deltaLat,
+        };
+        where.longitude = {
+          gte: lng - deltaLng,
+          lte: lng + deltaLng,
+        };
+      }
+
+      const venues = await this.prismaService.venue.findMany({
+        where,
+        include: {
+          amenityToVenues: { include: { amenity: true } },
+          reservations: true,
+          favourites: true,
+          venueType: true,
+        },
+      });
+
+      return venues;
+    } catch (error) {
+      throw error;
     }
+  }
 
-    return this.filterByAmenity(allAmenityIds);
+  async getCombinedAmenities(amenities: number[], occasionIds: number[]) {
+    try {
+      const allAmenityIds = [...amenities];
+
+      if (occasionIds.length > 0) {
+        const fetchedOccasions = await this.prismaService.occasion.findMany({
+          where: { id: { in: occasionIds } },
+          include: { amenities: true },
+        });
+
+        if (fetchedOccasions.length > 0) {
+          const occasionAmenityIds = fetchedOccasions.flatMap((occasion) =>
+            occasion.amenities.map((amenity) => amenity.id),
+          );
+          allAmenityIds.push(...occasionAmenityIds);
+        }
+      }
+
+      return Array.from(new Set(allAmenityIds));
+    } catch (error) {
+      throw error;
+    }
   }
 
   private async geocodeAddress(
